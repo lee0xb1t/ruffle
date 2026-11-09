@@ -329,9 +329,16 @@ impl<'gc> Domain<'gc> {
 
     /// Export a definition from a script into the current application domain.
     ///
-    /// This does nothing if the definition already exists in this domain or a parent.
+    /// This does nothing if the definition already exists in *this* domain.
+    ///
+    /// A parent domain must not block the export: Flash gives every loaded SWF its
+    /// own ApplicationDomain, and when that SWF defines a name that the loading
+    /// SWF also defines (both `Main`, say), the child keeps its own definition and
+    /// only falls back to the parent for names it does not define. Skipping the
+    /// export made the child resolve the parent's class instead - see
+    /// `export_class` below for the concrete breakage.
     pub fn export_definition(self, name: QName<'gc>, script: Script<'gc>, mc: &Mutation<'gc>) {
-        if self.has_definition(name) {
+        if self.cell().defs.contains_key(name) {
             return;
         }
 
@@ -340,9 +347,17 @@ impl<'gc> Domain<'gc> {
 
     /// Export a class into the current application domain.
     ///
-    /// This does nothing if the definition already exists in this domain or a parent.
+    /// This does nothing if the class already exists in *this* domain.
+    ///
+    /// Checking the parents here is wrong: a loaded SWF that defines a class with
+    /// the same name as a class of the loading SWF (both are called `Main` in
+    /// 造梦西游4's ad chain) never got its own class registered, so the SymbolClass
+    /// lookup fell through to the parent domain and resolved the *game's* `Main`.
+    /// The ad then assigned `content.base = ...` on a class that has no `base`
+    /// setter, which throws AVM2 #1056 and aborts the loader's COMPLETE dispatch,
+    /// leaving the preloader stuck at 100%.
     pub fn export_class(self, export_name: QName<'gc>, class: Class<'gc>, mc: &Mutation<'gc>) {
-        if self.has_class(export_name) {
+        if self.cell().classes.contains_key(export_name) {
             return;
         }
         self.cell_mut(mc).classes.insert_at_end(export_name, class);
