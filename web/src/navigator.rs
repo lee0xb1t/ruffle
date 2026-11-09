@@ -501,10 +501,18 @@ impl NavigatorBackend for WebNavigatorBackend {
         receiver: Receiver<Vec<u8>>,
         sender: Sender<SocketAction>,
     ) {
+        // A proxy entry matches by exact host/port. `host == "*"` (any host) and
+        // `port == 0` (any port) turn it into a catch-all: games that pick their
+        // server from a list at runtime - 造梦西游5 connects to a bare IP like
+        // 101.43.164.20:3010 that changes per session - cannot be covered by
+        // enumerating hosts in the config.
+        //
+        // With a catch-all the actual target is filled into the proxy URL, which
+        // may contain `{host}` / `{port}` placeholders.
         let Some(proxy) = self
             .socket_proxies
             .iter()
-            .find(|x| x.host == host && x.port == port)
+            .find(|x| (x.host == host || x.host == "*") && (x.port == port || x.port == 0))
         else {
             tracing::warn!("Missing WebSocket proxy for host {}, port {}", host, port);
             sender
@@ -513,9 +521,14 @@ impl NavigatorBackend for WebNavigatorBackend {
             return;
         };
 
-        tracing::info!("Connecting to {}", proxy.proxy_url);
+        let proxy_url = proxy
+            .proxy_url
+            .replace("{host}", &host)
+            .replace("{port}", &port.to_string());
 
-        let ws = match WebSocket::open(&proxy.proxy_url) {
+        tracing::info!("Connecting to {}", proxy_url);
+
+        let ws = match WebSocket::open(&proxy_url) {
             Ok(x) => x,
             Err(e) => {
                 tracing::error!("Failed to create WebSocket, reason {:?}", e);
